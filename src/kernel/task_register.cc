@@ -438,6 +438,33 @@
    return register_task_variant(TASK_MULTI_TOKEN_SOFTMAX, code.to_string());
  }
  
+ int TaskRegister::register_multi_token_linear_task(threadblock::Graph const &bgraph,
+                                                    std::vector<int> const &params) {
+   // params[0]: max_tokens
+   // params[1]: output_size  
+   // params[2]: reduction_size
+   // params[3]: blocks_per_token
+   assert(params.size() == 4);
+   
+   int max_tokens = params[0];
+   int output_size = params[1];
+   int reduction_size = params[2];
+   int blocks_per_token = params[3];
+   
+   mirage::transpiler::CodeKeeper code;
+   code.inc_indent();
+   code.e("kernel::multi_token_linear_kernel<bfloat16, $, $, $, $>(",
+          max_tokens, output_size, reduction_size, blocks_per_token);
+   code.e("    task_desc.inputs[0].base_ptr,");  // input [1, num_tokens * reduction_size]
+   code.e("    task_desc.inputs[1].base_ptr,");  // weight [reduction_size, output_size]
+   code.e("    task_desc.inputs[2].base_ptr,");  // residual [1, num_tokens * output_size]
+   code.e("    task_desc.outputs[0].base_ptr,"); // output [1, num_tokens * output_size]
+   code.e("    task_desc.inputs[0].dim[1] / $,", reduction_size); // num_tokens
+   code.e("    task_desc.inputs[2].base_ptr != nullptr);"); // has_residual
+   
+   return register_task_variant(TASK_MULTI_TOKEN_LINEAR, code.to_string());
+ }
+ 
  int TaskRegister::register_mask_attention_task(threadblock::Graph const &bgraph,
                                                  std::vector<int> const &params) {
    // params[0]: num_q_heads
