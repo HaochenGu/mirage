@@ -1,6 +1,7 @@
 #include "argmax.cuh"
 #include "bfloat16.h"
 #include "linear.cuh"
+#include "multi_token_linear.cuh"
 #include "norm.cuh"
 #include "norm_linear.cuh"
 #include "paged_attention.cuh"
@@ -13,6 +14,7 @@
 
 // using kernel::argmax_kernel;
 using kernel::linear_kernel;
+using kernel::multi_token_linear_kernel;
 using kernel::norm_linear_task_impl;
 using kernel::paged_attention_task_impl;
 using kernel::silu_mul_linear_task_impl;
@@ -901,6 +903,73 @@ void linear(torch::Tensor input,
 //   }
 // }
 
+// Multi-token Linear
+
+template <typename T, int MAX_TOKENS, int OUTPUT_SIZE, int REDUCTION_SIZE, int BLOCKS_PER_TOKEN>
+__global__ void multi_token_linear_kernel_wrapper(void const *input_ptr,
+                                                  void const *weight_ptr,
+                                                  void const *residual_ptr,
+                                                  void *output_ptr,
+                                                  int num_tokens) {
+  multi_token_linear_kernel<T, MAX_TOKENS, OUTPUT_SIZE, REDUCTION_SIZE, BLOCKS_PER_TOKEN>(
+      input_ptr, weight_ptr, residual_ptr, output_ptr, num_tokens, residual_ptr != nullptr);
+}
+
+template <typename T, int MAX_TOKENS, int OUTPUT_SIZE, int REDUCTION_SIZE, int BLOCKS_PER_TOKEN>
+void launch_multi_token_linear(void const *input_ptr,
+                               void const *weight_ptr,
+                               void const *residual_ptr,
+                               void *output_ptr,
+                               int num_tokens) {
+  dim3 grid_dim(num_tokens * BLOCKS_PER_TOKEN, 1, 1);
+  dim3 block_dim(128, 1, 1);
+  size_t smem_size = 112640;
+
+  cudaFuncSetAttribute(
+      multi_token_linear_kernel_wrapper<T, MAX_TOKENS, OUTPUT_SIZE, REDUCTION_SIZE, BLOCKS_PER_TOKEN>,
+      cudaFuncAttributeMaxDynamicSharedMemorySize,
+      smem_size);
+
+  multi_token_linear_kernel_wrapper<T, MAX_TOKENS, OUTPUT_SIZE, REDUCTION_SIZE, BLOCKS_PER_TOKEN>
+      <<<grid_dim, block_dim, smem_size>>>(
+          input_ptr, weight_ptr, residual_ptr, output_ptr, num_tokens);
+}
+
+void multi_token_linear(torch::Tensor input,
+                        torch::Tensor weight,
+                        torch::optional<torch::Tensor> residual,
+                        torch::Tensor output,
+                        int max_tokens,
+                        int hidden_dim,
+                        int output_dim,
+                        int blocks_per_token,
+                        int num_tokens) {
+
+  void const *input_ptr = input.data_ptr();
+  void const *weight_ptr = weight.data_ptr();
+  void const *residual_ptr = residual.has_value() ? residual->data_ptr() : nullptr;
+  void *output_ptr = output.data_ptr();
+
+  // For now, we'll support specific configurations
+  // You can add more configurations as needed
+  if (max_tokens == 32 && hidden_dim == 128 && output_dim == 128 && blocks_per_token == 1) {
+    launch_multi_token_linear<bfloat16, 32, 128, 128, 1>(
+        input_ptr, weight_ptr, residual_ptr, output_ptr, num_tokens);
+  } else if (max_tokens == 32 && hidden_dim == 4096 && output_dim == 4096 && blocks_per_token == 1) {
+    launch_multi_token_linear<bfloat16, 32, 4096, 4096, 1>(
+        input_ptr, weight_ptr, residual_ptr, output_ptr, num_tokens);
+  } else {
+    printf("Unsupported configuration in test: max_tokens=%d, hidden_dim=%d, output_dim=%d, blocks_per_token=%d\n",
+           max_tokens, hidden_dim, output_dim, blocks_per_token);
+    return;
+  }
+
+  cudaError_t err = cudaDeviceSynchronize();
+  if (err != cudaSuccess) {
+    printf("CUDA kernel launch error: %s\n", cudaGetErrorString(err));
+  }
+}
+
 // pybind11 bindings
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -908,6 +977,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // m.def("argmax", &argmax, "argmax kernel");
   m.def("norm_linear", &norm_linear, "RMSNorm Linear kernel");
   m.def("silu_mul_linear", &silu_mul_linear, "SILU MUL Linear kernel");
+  m.def("multi_token_linear", &multi_token_linear, "Multi-token Linear kernel",
+        py::arg("input"),
+        py::arg("weight"),
+        py::arg("residual") = py::none(),
+        py::arg("output"),
+        py::arg("max_tokens"),
+        py::arg("hidden_dim"),
+        py::arg("output_dim"),
+        py::arg("blocks_per_token"),
+        py::arg("num_tokens"));
   m.def("single_batch_decoding",
         &single_batch_decoding,
         py::arg("qkv"),
