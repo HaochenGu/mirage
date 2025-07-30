@@ -2,6 +2,7 @@
 #include "embedding.cuh"
 #include "multi_token_embedding.cuh"
 #include "linear.cuh"
+#include "multi_token_linear.cuh"
 #include "norm_linear.cuh"
 #include "paged_attention.cuh"
 #include "reduction.cuh"
