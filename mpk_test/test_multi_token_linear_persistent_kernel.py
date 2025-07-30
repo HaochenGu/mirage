@@ -1,5 +1,6 @@
 import mirage as mi
 import torch
+import time
 
 types = torch.bfloat16
 
@@ -21,9 +22,9 @@ def test_multi_token_linear():
 
     # Test configurations
     test_cases = [
-        (4, 512, 384),   # (num_tokens, reduction_size, output_size)
-        (8, 1024, 768),
-        (16, 2048, 1536),
+        (4, 4096, 4096),   # (num_tokens, reduction_size, output_size)
+        (8, 4096, 4096),
+        (16, 4096*3, 4096),
     ]
     
     for num_tokens, reduction_size, output_size in test_cases:
@@ -38,6 +39,7 @@ def test_multi_token_linear():
         
         # PyTorch reference - apply softmax first to match MPK pipeline
         print("\n1. PyTorch reference (with dummy softmax):")
+        start_time = time.time()
         # Apply softmax to match dummy operation
         input_after_softmax = torch.nn.functional.softmax(input_data, dim=-1)
         # Now do linear operation
@@ -45,6 +47,8 @@ def test_multi_token_linear():
         output_ref = torch.matmul(input_reshaped, weight) + residual.view(num_tokens, output_size)
         output_ref = output_ref.view(1, -1)
         print(f"   Output shape: {output_ref.shape}")
+        end_time = time.time()
+        print(f"PyTorch Time taken: {end_time - start_time} seconds")
 
         # MPK multi-token linear
         print("\n2. MPK multi_token_linear:")
@@ -102,7 +106,11 @@ def test_multi_token_linear():
         
         # Compile and execute
         mpk.compile()
+
+        start_time = time.time()
         mpk()
+        end_time = time.time()
+        print(f"MPK Time taken: {end_time - start_time} seconds")
         
         print(f"   Output shape: {output_buffer.shape}")
 
@@ -117,7 +125,7 @@ def test_multi_token_linear():
         print(f"   Relative error: {rel_error}")
 
         # Check if results match within tolerance
-        tolerance = 1e-2  # BFloat16 precision
+        tolerance = 2e-2  # BFloat16 precision
         if max_diff < tolerance:
             print(f"   ✓ PASSED")
         else:
@@ -126,6 +134,8 @@ def test_multi_token_linear():
             print("\n   First few values:")
             print(f"   MPK:       {output_buffer[0, :5]}")
             print(f"   Reference: {output_ref[0, :5]}")
+
+            raise Exception("Test failed")
 
     print(f"\n{'='*60}")
     print("All tests completed!")

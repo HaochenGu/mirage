@@ -544,9 +544,8 @@ class PersistentKernel:
         assert output.dim(1) == num_tokens * output_size
         
         # Create threadblock graph
-        # Shared memory only needed for input vector
-        smem_size = reduction_size * 2  # sizeof(bfloat16) = 2
-        tb_graph = TBGraph(CyTBGraph(grid_dim, block_dim, 1, smem_size))
+        # Calculate shared memory size needed
+        tb_graph = TBGraph(CyTBGraph(grid_dim, block_dim, 1, 64))
         
         # Key mapping configuration:
         # - Input: Map dimension 1 to grid.x (partition by tokens)
@@ -562,44 +561,6 @@ class PersistentKernel:
         self.kn_graph.customized([input, weight, residual, output], tb_graph)
         self.kn_graph.register_task(tb_graph, "multi_token_linear", 
                                    [output_size, reduction_size, max_tokens])
-
-    def multi_token_linear_layer(
-        self,
-        input: DTensor,
-        weight: DTensor,
-        residual: DTensor,
-        output: DTensor,
-        grid_dim: tuple,
-        block_dim: tuple,
-        max_tokens: int,
-        hidden_dim: int,
-        output_dim: int,
-        blocks_per_token: int = 1,
-    ):
-        # input: (1, num_tokens * hidden_dim) - concatenated features
-        # weight: (hidden_dim, output_dim) - weight matrix
-        # residual: (1, num_tokens * output_dim) or None - optional residual
-        # output: (1, num_tokens * output_dim) - concatenated outputs
-        assert input.num_dims == 2
-        assert weight.num_dims == 2
-        assert output.num_dims == 2
-        assert input.dim(0) == 1 and output.dim(0) == 1
-        assert input.dim(1) % hidden_dim == 0
-        assert output.dim(1) % output_dim == 0
-        assert weight.dim(0) == hidden_dim and weight.dim(1) == output_dim
-        
-        if residual is not None:
-            assert residual.num_dims == 2
-            assert residual.dim(0) == 1
-            assert residual.dim(1) == output.dim(1)
-        
-        tb_graph = TBGraph(CyTBGraph(grid_dim, block_dim, 1, 64))
-        tb_graph.new_input(input, (1, -1, -1), -1, True)
-        tb_graph.new_input(weight, (-1, -1, -1), -1, True)
-        tb_graph.new_input(residual if residual is not None else input, (1, -1, -1), -1, True)
-        tb_graph.new_input(output, (1, -1, -1), -1, True)
-        self.kn_graph.customized([input, weight, residual if residual is not None else input, output], tb_graph)
-        self.kn_graph.register_task(tb_graph, "multi_token_linear", [max_tokens, output_dim, hidden_dim, blocks_per_token])
 
     def mask_attention_layer(
         self,
