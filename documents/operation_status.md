@@ -18,7 +18,8 @@ This document tracks the implementation status of all customized operations adde
 ### 3. Multi-Token Linear (TASK_MULTI_TOKEN_LINEAR = 116)
 - **Status**: Implemented and Tested
 - **Design**: One block per token
-- **Performance**: Much slower than pytorch
+- **Performance**: Much slower than pytorch, error is at 2e-2 level, core operation needs rewrite.
+
 
 ### 4. Tree Attention (TASK_TREE_ATTENTION = 117)
 - **Status**: Implemented and Tested
